@@ -2,6 +2,7 @@ import os
 import psycopg
 from fastmcp import FastMCP
 from sentence_transformers import SentenceTransformer
+import cohere
 
 # define database connection
 POSTGRES_HOST = os.environ.get("POSTGRES_HOST", "localhost")
@@ -27,9 +28,20 @@ MAX_RESPONSE_CHARS = int(os.environ.get("MAX_RESPONSE_CHARS", "4000")) # total o
 # define sentence encoder
 ENCODER_MODEL = os.environ.get("ENCODER_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
 
+# get cohere API
+COHERE_API_KEY = os.environ.get("COHERE_API_KEY", "")
+
 # initialize mcp and sentence encoder
 mcp = FastMCP("financial_data_server")
-model = SentenceTransformer(ENCODER_MODEL)
+
+# initialize cohere client
+co = None
+if len(COHERE_API_KEY):
+    co = cohere.Client(COHERE_API_KEY)
+else:
+    # Initialize the local embedding model
+    print(f"Loading local embedding model ({ENCODER_MODEL})")
+    model = SentenceTransformer(ENCODER_MODEL)
 
 def _normalize_sql_query(sql_query: str) -> str:
     # remove whitespace and semicolon
@@ -162,8 +174,12 @@ def search_news_headlines(
         - On failure, returns a plain-text error string beginning with 'Vector Search Error:'.
     """
     try:
-        # Vectorize the incoming user query using the same embedding space
-        query_vector = model.encode(query).tolist()
+        if co is None:
+            # Vectorize user query using the same embedding space (local encoder)
+            query_vector = model.encode(query).tolist()
+        else:
+            # using cohere API
+            query_vector = co.embed(texts=[query], model="embed-english-light-v3.0", input_type="search_query",).embeddings[0]
         
         # build SQL query
         # <=> cosine distance operator to scan our HNSW index

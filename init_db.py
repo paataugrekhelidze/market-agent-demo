@@ -3,6 +3,9 @@ import polars as pl
 import psycopg
 from pgvector.psycopg import register_vector
 from sentence_transformers import SentenceTransformer
+import cohere
+import time
+import numpy as np
 
 POSTGRES_HOST = os.environ.get("POSTGRES_HOST", "localhost")
 POSTGRES_PORT = os.environ.get("POSTGRES_PORT", "5432")
@@ -22,9 +25,18 @@ HEADLINE_SAMPLE_SIZE = int(os.environ.get("HEADLINE_SAMPLE_SIZE", "200000"))
 
 ENCODER_MODEL = os.environ.get("ENCODER_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
 
-# Initialize the local embedding model
-print(f"Loading local embedding model ({ENCODER_MODEL})")
-model = SentenceTransformer(ENCODER_MODEL,)
+# get cohere API
+COHERE_API_KEY = os.environ.get("COHERE_API_KEY", "")
+BATCH_SIZE = 96
+
+# initialize cohere client
+co = None
+if len(COHERE_API_KEY):
+    co = cohere.Client(COHERE_API_KEY)
+else:
+    # Initialize the local embedding model
+    print(f"Loading local embedding model ({ENCODER_MODEL})")
+    model = SentenceTransformer(ENCODER_MODEL)
 
 # load datasets using Polars
 securities_df = (
@@ -64,7 +76,27 @@ headlines_df = (
 
 print(f"Vectorizing headlines (time consuming)")
 headlines_list = headlines_df["headline"].to_list()
-embeddings = model.encode(headlines_list, show_progress_bar=True)
+
+if co is None:
+    # Vectorize headlines using a custom encoder (local)
+    embeddings = model.encode(headlines_list, show_progress_bar=True)
+
+else:
+    # cohere api becomes incosistent with larger data, so split into smaller batches
+    all_embeddings = []
+
+    for i in range(0, len(headlines_list), BATCH_SIZE):
+        batch = headlines_list[i:i + BATCH_SIZE]
+        result = co.embed(
+            texts=batch,
+            model="embed-english-light-v3.0",
+            input_type="search_document",
+        ).embeddings
+        all_embeddings.extend(result)
+        print(f"  Embedded {min(i + BATCH_SIZE, len(headlines_list))}/{len(headlines_list)}")
+        time.sleep(0.1)  # avoid hammering the API
+
+    embeddings = np.array(all_embeddings)
 
 # 4. Bulk Load into pgvector using Binary Copy
 with psycopg.connect(CONN_STR) as conn:
