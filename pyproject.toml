@@ -1,0 +1,19 @@
+[project]
+name = "market-agent-demo"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.136.1",
+    "fastmcp>=3.3.1",
+    "ipykernel>=7.2.0",
+    "numpy>=2.4.6",
+    "pgvector>=0.4.2",
+    "polars>=1.40.1",
+    "prefect>=3.7.1",
+    "psycopg[binary]>=3.3.4",
+    "pydantic-ai>=1.100.0",
+    "sentence-transformers>=5.5.1",
+    "uvicorn>=0.47.0",
+]
