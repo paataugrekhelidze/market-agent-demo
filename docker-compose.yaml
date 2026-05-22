@@ -4,8 +4,6 @@ services:
   db:
     image: pgvector/pgvector:pg17
     container_name: agent_cluster_db
-    ports:
-      - "5432:5432"
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: local_dev_password
@@ -33,14 +31,47 @@ services:
       POSTGRES_PASSWORD: local_dev_password
       DATA_DIR: /app/data
       HEADLINE_SAMPLE_SIZE: "20000"
+      COHERE_API_KEY: ${COHERE_API_KEY}
+      UV_LINK_MODE: copy
     volumes:
       - .:/app
       # prevent conflict with local .venv
-      - container_venv:/app/.venv
+      - init_db_venv:/app/.venv
       - uv_cache:/root/.cache/uv
     command: sh -c "uv sync --frozen && uv run --frozen python init_db.py"
+
+  agent:
+    build: .
+    container_name: agent_runner
+    ports:
+      - "8080:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: db
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: agent_warehouse
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: local_dev_password
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      COHERE_API_KEY: ${COHERE_API_KEY}
+      HF_HOME: /root/.cache/huggingface
+      UV_LINK_MODE: copy
+      PREFECT_SERVER_ANALYTICS_ENABLED: "false"
+    volumes:
+      - agent_venv:/app/.venv
+      - uv_cache:/root/.cache/uv
+      - hf_cache:/root/.cache/huggingface
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
 volumes:
   pg_data:
   uv_cache:
-  container_venv:
+  init_db_venv:
+  agent_venv:
+  hf_cache:
