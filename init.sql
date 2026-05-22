@@ -1,6 +1,9 @@
 -- Enable the vector extension
 CREATE EXTENSION IF NOT EXISTS vector;
 
+-- Create Prefect metadata database (used by prefect-server)
+CREATE DATABASE prefect;
+
 CREATE TABLE IF NOT EXISTS nyse_securities (
     ticker VARCHAR(10),
     create_date DATE,
