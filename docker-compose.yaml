@@ -1,0 +1,46 @@
+version: '3.8'
+
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    container_name: agent_cluster_db
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: local_dev_password
+      POSTGRES_DB: agent_warehouse
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d agent_warehouse"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  init-db:
+    image: ghcr.io/astral-sh/uv:python3.12-trixie-slim
+    working_dir: /app
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: db
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: agent_warehouse
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: local_dev_password
+      DATA_DIR: /app/data
+      HEADLINE_SAMPLE_SIZE: "20000"
+    volumes:
+      - .:/app
+      # prevent conflict with local .venv
+      - container_venv:/app/.venv
+      - uv_cache:/root/.cache/uv
+    command: sh -c "uv sync --frozen && uv run --frozen python init_db.py"
+
+volumes:
+  pg_data:
+  uv_cache:
+  container_venv:
