@@ -9,14 +9,22 @@ from pydantic_ai.messages import ModelResponse, ModelRequest, ToolCallPart, Tool
 from pydantic_ai.mcp import MCPToolset
 from mcp_server import mcp as financial_mcp_server
 import json
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from prefect import flow, task
 from prefect.cache_policies import INPUTS
+from prefect.concurrency.asyncio import concurrency
 from datetime import timedelta
+from contextlib import asynccontextmanager
+import httpx
 
 # Allow Prefect to persist results to disk locally for caching
 # Might require change in prod
 os.environ["PREFECT_RESULTS_PERSIST_BY_DEFAULT"] = "true"
+
+AGENT_CONCURRENCY_LIMIT = int(os.environ.get("AGENT_CONCURRENCY_LIMIT") or "3")
+PREFECT_API_URL = os.environ.get("PREFECT_API_URL", "http://localhost:4200/api")
+# Max seconds a request may wait for a free concurrency slot before returning 503
+PIPELINE_QUEUE_TIMEOUT = int(os.environ.get("PIPELINE_QUEUE_TIMEOUT") or "60")
 
 # initialize local FastMCP tools
 financial_tools = MCPToolset(financial_mcp_server)
@@ -115,13 +123,13 @@ adapter_agent = Agent(
     name="Agent Execution Step", 
     cache_policy=INPUTS, 
     cache_expiration=timedelta(minutes=10), # limit cache duration, same as the request timeout limit
-    timeout_seconds=300
+    timeout_seconds=120
 )
-def run_dynamic_agent_step(step_id: int, prompt: str, context: str):
+async def run_dynamic_agent_step(step_id: int, prompt: str, context: str):
     print(f"Executing Step {step_id}: instruction: {prompt} (Cache Miss)...")
         
     # Execute step using the cumulative context built from prior loop steps
-    result = agent.run_sync(
+    result = await agent.run(
         f"Context: {context}. Prompt: {prompt}", 
         usage_limits=UsageLimits(
         request_limit=4, # 1 tool selection, free tool action, 1 tool observation/interpretation
@@ -139,9 +147,9 @@ def run_dynamic_agent_step(step_id: int, prompt: str, context: str):
     return result.output
 
 @task(name="Create Execution Plan", cache_policy=INPUTS, cache_expiration=timedelta(minutes=10))
-def create_execution_plan(intent: str, max_steps: int) -> ExecutionPlan:
+async def create_execution_plan(intent: str, max_steps: int) -> ExecutionPlan:
     print("Creating execution plan...")
-    result = planner_agent.run_sync(
+    result = await planner_agent.run(
         f"Intent: {intent}\n\nProduce a plan with at most {max_steps} steps."
     )
     plan = result.output
@@ -151,9 +159,9 @@ def create_execution_plan(intent: str, max_steps: int) -> ExecutionPlan:
     return plan
 
 @task(name="Revise Execution Plan", cache_policy=INPUTS, cache_expiration=timedelta(minutes=10))
-def revise_execution_plan(intent: str, context: str, remaining_steps_json: str, step_id: int) -> PlanRevision:
+async def revise_execution_plan(intent: str, context: str, remaining_steps_json: str, step_id: int) -> PlanRevision:
     print(f"Revising plan after step {step_id}...")
-    result = adapter_agent.run_sync(
+    result = await adapter_agent.run(
         f"Intent: {intent}\n\nGathered Context:\n{context}\n\nRemaining Planned Steps (JSON):\n{remaining_steps_json}"
     )
     revision = result.output
@@ -161,10 +169,10 @@ def revise_execution_plan(intent: str, context: str, remaining_steps_json: str, 
     return revision
 
 @task(name="Final Summarizer", cache_policy=INPUTS, cache_expiration=timedelta(minutes=10))
-def generate_final_summary(intent: str, full_context: str) -> str:
+async def generate_final_summary(intent: str, full_context: str) -> str:
     print("Generating Final Summary Report...")
     summarizer = Agent('openai:gpt-4o-mini', system_prompt="Synthesize the gathered context into a clear, structured response. Only share information that is relevant to the original intent, without additional information.")
-    result = summarizer.run_sync(f"Original Intent: {intent}\n\nGathered Data:\n{full_context}")
+    result = await summarizer.run(f"Original Intent: {intent}\n\nGathered Data:\n{full_context}")
     return result.output
 
 # --- PIPELINE ORCHESTRATION ---
@@ -176,11 +184,11 @@ def generate_final_summary(intent: str, full_context: str) -> str:
     timeout_seconds=300,
     log_prints=True
 )
-def financial_react_pipeline(user_intent: str, max_tasks: int = 5):
+async def financial_react_pipeline(user_intent: str, max_tasks: int = 5):
     print(f"Starting Autonomous Pipeline for: '{user_intent}'")
 
     # Plan — planner sees both available tools and produces an ordered, tool-aware step list
-    plan = create_execution_plan(user_intent, max_tasks)
+    plan = await create_execution_plan(user_intent, max_tasks)
     remaining_steps: list[PlanStep] = list(plan.steps[:max_tasks])
     cumulative_context = "No data gathered yet."
 
@@ -190,7 +198,7 @@ def financial_react_pipeline(user_intent: str, max_tasks: int = 5):
         print(f"   Rationale: {current_step.rationale}")
 
         # Act — tool hint is embedded in the prompt to guide tool selection
-        step_result = run_dynamic_agent_step(
+        step_result = await run_dynamic_agent_step(
             step_id=current_step.step_id,
             prompt=f"[Preferred tool: {current_step.tool_hint}] {current_step.instruction}",
             context=cumulative_context
@@ -204,7 +212,7 @@ def financial_react_pipeline(user_intent: str, max_tasks: int = 5):
 
         # Adapt - revise remaining plan based on what was just learned
         remaining_json = json.dumps([s.model_dump() for s in remaining_steps])
-        revision = revise_execution_plan(
+        revision = await revise_execution_plan(
             intent=user_intent,
             context=cumulative_context,
             remaining_steps_json=remaining_json,
@@ -227,14 +235,33 @@ def financial_react_pipeline(user_intent: str, max_tasks: int = 5):
             print(f"-- Plan revised: {len(remaining_steps)} step(s) remaining.")
 
     # Summarize accumulated text
-    final_output = generate_final_summary(user_intent, cumulative_context)
+    final_output = await generate_final_summary(user_intent, cumulative_context)
     print("\n" + "="*40 + "\nFINAL OUTPUT\n" + "="*40)
     print(final_output)
     return final_output
 
 # --- EXPOSE API ENDPOINT ---
 
-app = FastAPI(title="Market Agent API")
+# set prefect limit during web server startup
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    async with httpx.AsyncClient() as client:
+        # check if limit already exists
+        resp = await client.get(f"{PREFECT_API_URL}/v2/concurrency_limits/agent-pipeline")
+        if resp.status_code == 404:
+            await client.post(
+                f"{PREFECT_API_URL}/v2/concurrency_limits/",
+                json={"name": "agent-pipeline", "limit": AGENT_CONCURRENCY_LIMIT, "active": True},
+            )
+        else:
+            limit_id = resp.json()["id"]
+            await client.patch(
+                f"{PREFECT_API_URL}/v2/concurrency_limits/{limit_id}",
+                json={"limit": AGENT_CONCURRENCY_LIMIT},
+            )
+    yield
+
+app = FastAPI(title="Market Agent API", lifespan=lifespan)
 
 class RunRequest(BaseModel):
     intent: str
@@ -248,8 +275,12 @@ def health():
     return {"status": "ok"}
 
 @app.post("/run", response_model=RunResponse)
-def run_pipeline(req: RunRequest):
-    result = financial_react_pipeline(req.intent, req.max_tasks)
+async def run_pipeline(req: RunRequest):
+    try:
+        async with concurrency("agent-pipeline", occupy=1, timeout_seconds=PIPELINE_QUEUE_TIMEOUT):
+            result = await financial_react_pipeline(req.intent, req.max_tasks)
+    except TimeoutError:
+        raise HTTPException(status_code=503, detail="Server busy — no pipeline slot available. Retry shortly.")
     return RunResponse(result=result)
 
 if __name__ == "__main__":

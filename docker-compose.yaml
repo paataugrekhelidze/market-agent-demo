@@ -30,6 +30,7 @@ services:
       DATA_DIR: /app/data
       HEADLINE_SAMPLE_SIZE: "20000"
       COHERE_API_KEY: ${COHERE_API_KEY}
+      ENCODER_MODEL: ${ENCODER_MODEL}
       UV_LINK_MODE: copy
     volumes:
       - .:/app
@@ -76,10 +77,13 @@ services:
       POSTGRES_PASSWORD: local_dev_password
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       COHERE_API_KEY: ${COHERE_API_KEY}
+      ENCODER_MODEL: ${ENCODER_MODEL}
       HF_HOME: /root/.cache/huggingface
       UV_LINK_MODE: copy
       PREFECT_SERVER_ANALYTICS_ENABLED: "false"
       PREFECT_API_URL: http://prefect-server:4200/api
+      AGENT_CONCURRENCY_LIMIT: ${AGENT_CONCURRENCY_LIMIT:-3}
+      PIPELINE_QUEUE_TIMEOUT: ${PIPELINE_QUEUE_TIMEOUT:-60}
     volumes:
       - agent_venv:/app/.venv
       - uv_cache:/root/.cache/uv
