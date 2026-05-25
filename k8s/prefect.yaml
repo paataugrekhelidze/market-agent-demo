@@ -1,0 +1,39 @@
+# prefect.yaml
+name: market-agent-demo
+prefect-version: "3.7.1"
+
+# --- pull code at runtime ---
+# runs at flow run time, not at deploy time.
+# When a flow run is dispatched, the job pod clones github repo (pull) -> installs deps (pull) -> imports entrypoint (deployment) -> executes the flow
+pull:
+  - prefect.deployments.steps.git_clone:
+      id: clone-step
+      repository: https://github.com/paataugrekhelidze/market-agent-demo.git
+      branch: main
+      #credentials: "{{ prefect.blocks.github-credentials.github-token }}"
+  - prefect.deployments.steps.run_shell_script:
+      script: uv sync --frozen --system
+      directory: "{{ clone-step.directory }}"
+
+deployments:
+  - name: kubernetes-deployment
+    version: "1.0.0"
+    tags: ["development"]
+    description: "Financial market analysis pipeline on Kubernetes"
+
+    entrypoint: k8s/pipeline.py:financial_react_pipeline
+
+    work_pool:
+      name: my-kubernetes-pool
+      job_variables:
+        image: ghcr.io/astral-sh/uv:python3.12-trixie-slim
+        env:
+          OPENAI_API_KEY: "{{ prefect.blocks.secret.openai-api-key }}"
+          COHERE_API_KEY: "{{ prefect.blocks.secret.cohere-api-key }}"
+          PREFECT_RESULTS_DEFAULT_STORAGE_BLOCK: "s3-bucket/anthelion-s3-storage"
+          PREFECT_RESULTS_PERSIST_BY_DEFAULT: "true"
+
+    parameters:
+      max_tasks: 5
+
+    schedules: []  # no automatic schedule, triggered on-demand via API
