@@ -74,4 +74,28 @@ curl -X POST http://localhost:8080/run \
 View From Kubernetes:
 ![K8s Pod History](assets/prefect_4.png)
 View From Prefect UI
-![Prefect UI Outpyt](assets/prefect_5.png)
+![Prefect UI Output](assets/prefect_5.png)
+
+Data is written to s3:
+![S3 Bucket](assets/prefect_6.png)
+
+Prefect Content (Raw):
+```json
+{
+  "metadata": {
+    "storage_key": "74725233c3bef6bcc969c6752070ccef",
+    "expiration": "2026-05-25T18:53:09.007928Z",
+    "serializer": {
+      "type": "pickle",
+      "picklelib": "cloudpickle",
+      "picklelib_version": null
+    },
+    "prefect_version": "3.7.2",
+    "storage_block_id": "57e1afa2-848e-459c-9d18-b2f6fb521359"
+  },
+  "result": "gAWVhAEAAAAAAABYfQEAAEFzIG9mIHRoZSBsYXRlc3QgaW5mb3JtYXRpb24sIHRoZSB0b3AgTllT\nRSBzdG9ja3MgYnkgbWFya2V0IGNhcGl0YWxpemF0aW9uIHR5cGljYWxseSBpbmNsdWRlIGNvbXBh\nbmllcyBsaWtlOgoKMS4gKipBcHBsZSBJbmMuIChBQVBMKSoqCjIuICoqTWljcm9zb2Z0IENvcnBv\ncmF0aW9uIChNU0ZUKSoqCjMuICoqQmVya3NoaXJlIEhhdGhhd2F5IEluYy4gKEJSSy5BKSoqCjQu\nICoqQWxwaGFiZXQgSW5jLiAoR09PR0wpKioKNS4gKipBbWF6b24uY29tLCBJbmMuIChBTVpOKSoq\nCgpGb3IgdGhlIG1vc3QgYWNjdXJhdGUgYW5kIHVwZGF0ZWQgbGlzdCwgcGxlYXNlIHJlZmVyIHRv\nIGEgZmluYW5jaWFsIG5ld3Mgc291cmNlIG9yIHN0b2NrIG1hcmtldCBkYXRhIHBsYXRmb3JtLpQu\n"
+}
+```
+
+Prefect Content (Decoded):
+![Prefect Object Decoded](assets/prefect_7.png)
