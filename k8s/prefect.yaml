@@ -12,7 +12,9 @@ pull:
       branch: main
       #credentials: "{{ prefect.blocks.github-credentials.github-token }}"
   - prefect.deployments.steps.run_shell_script:
-      script: uv sync --frozen --system
+      script: |
+        pip install uv
+        env UV_SYSTEM_PYTHON=1 uv sync --frozen
       directory: "{{ clone-step.directory }}"
 
 deployments:
@@ -26,8 +28,9 @@ deployments:
     work_pool:
       name: my-kubernetes-pool
       job_variables:
-        image: ghcr.io/astral-sh/uv:python3.12-trixie-slim
+        image: prefecthq/prefect:3.7.2-python3.12
         env:
+          PREFECT_SERVER_EPHEMERAL_ENABLED: "false"
           OPENAI_API_KEY: "{{ prefect.blocks.secret.openai-api-key }}"
           COHERE_API_KEY: "{{ prefect.blocks.secret.cohere-api-key }}"
           PREFECT_RESULTS_DEFAULT_STORAGE_BLOCK: "s3-bucket/anthelion-s3-storage"
